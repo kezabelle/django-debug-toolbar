@@ -69,6 +69,11 @@ class TemplatesPanel(Panel):
     def __init__(self, *args, **kwargs):
         super(TemplatesPanel, self).__init__(*args, **kwargs)
         self.templates = []
+        # Refs GitHub issue #910
+        # Holds a collection of unique context layers, keyed by a string 
+        # version of them, with the value holding the `pformat` output 
+        # of the original dictionary. See _store_template_info.
+        self.pformats = {}
 
     def _store_template_info(self, sender, **kwargs):
         template, context = kwargs['template'], kwargs['context']
@@ -104,7 +109,7 @@ class TemplatesPanel(Panel):
                     else:
                         try:
                             recording(False)
-                            pformat(value)  # this MAY trigger a db query
+                            force_text(value)  # this MAY trigger a db query
                         except SQLQueryTriggered:
                             temp_layer[key] = '<<triggers database query>>'
                         except UnicodeEncodeError:
@@ -115,12 +120,28 @@ class TemplatesPanel(Panel):
                             temp_layer[key] = value
                         finally:
                             recording(True)
+            # Refs GitHub issue #910
+            # After Django introduced template based form widget rendering, 
+            # djdt has to collect and format far more contexts, many of which
+            # are duplicates, and don't need formatting if we've already seen
+            # the exact same context.
+            # We sort the `temp_layer` dictionary as a 2-tuple to ensure that
+            # ordering is consistent, before simply converting it to a string
+            # representation to ensure UnicodeEncodeError can be raised as it
+            # was previously.
+            # If the stringification succeeded, and we've not seen the key
+            # before, pformat it. If we've seen it before, we should be able
+            # to just re-use it.
             try:
-                context_list.append(pformat(temp_layer))
+                forced = force_text(sorted(temp_layer.items()))
             except UnicodeEncodeError:
-                pass
+                continue
+            else:
+                if forced not in self.pformats:
+                    self.pformats[forced] = force_text(pformat(temp_layer))
+                context_list.append(self.pformats[forced])
 
-        kwargs['context'] = [force_text(item) for item in context_list]
+        kwargs['context'] = context_list
         kwargs['context_processors'] = getattr(context, 'context_processors', None)
         self.templates.append(kwargs)
 
