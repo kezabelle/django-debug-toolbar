@@ -85,39 +85,40 @@ class TemplatesPanel(Panel):
 
         context_list = []
         for context_layer in context.dicts:
-            temp_layer = {}
+            temp_layer = []
             if hasattr(context_layer, 'items'):
-                for key, value in context_layer.items():
+                ordered_context_layer = sorted(context_layer.items())
+                for key, value in ordered_context_layer:
                     # Replace any request elements - they have a large
                     # unicode representation and the request data is
                     # already made available from the Request panel.
                     if isinstance(value, http.HttpRequest):
-                        temp_layer[key] = '<<request>>'
+                        temp_layer.append((key, '<<request>>'))
                     # Replace the debugging sql_queries element. The SQL
                     # data is already made available from the SQL panel.
                     elif key == 'sql_queries' and isinstance(value, list):
-                        temp_layer[key] = '<<sql_queries>>'
+                        temp_layer.append((key, '<<sql_queries>>'))
                     # Replace LANGUAGES, which is available in i18n context processor
                     elif key == 'LANGUAGES' and isinstance(value, tuple):
-                        temp_layer[key] = '<<languages>>'
+                        temp_layer.append((key, '<<languages>>'))
                     # QuerySet would trigger the database: user can run the query from SQL Panel
                     elif isinstance(value, (QuerySet, RawQuerySet)):
                         model_name = "%s.%s" % (
                             value.model._meta.app_label, value.model.__name__)
-                        temp_layer[key] = '<<%s of %s>>' % (
-                            value.__class__.__name__.lower(), model_name)
+                        temp_layer.append((key, '<<%s of %s>>' % (
+                            value.__class__.__name__.lower(), model_name)))
                     else:
                         try:
                             recording(False)
                             force_text(value)  # this MAY trigger a db query
                         except SQLQueryTriggered:
-                            temp_layer[key] = '<<triggers database query>>'
+                            temp_layer.append((key, '<<triggers database query>>'))
                         except UnicodeEncodeError:
-                            temp_layer[key] = '<<unicode encode error>>'
+                            temp_layer.append((key, '<<unicode encode error>>'))
                         except Exception:
-                            temp_layer[key] = '<<unhandled exception>>'
+                            temp_layer.append((key, '<<unhandled exception>>'))
                         else:
-                            temp_layer[key] = value
+                            temp_layer.append((key, value))
                         finally:
                             recording(True)
             # Refs GitHub issue #910
@@ -133,12 +134,12 @@ class TemplatesPanel(Panel):
             # before, pformat it. If we've seen it before, we should be able
             # to just re-use it.
             try:
-                forced = force_text(sorted(temp_layer.items()))
+                forced = force_text(temp_layer)
             except UnicodeEncodeError:
                 continue
             else:
                 if forced not in self.pformats:
-                    self.pformats[forced] = force_text(pformat(temp_layer))
+                    self.pformats[forced] = force_text(pformat(dict(temp_layer)))
                 context_list.append(self.pformats[forced])
 
         kwargs['context'] = context_list
