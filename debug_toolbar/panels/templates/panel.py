@@ -84,17 +84,18 @@ class TemplatesPanel(Panel):
                 template.name.startswith('debug_toolbar/')):
             return
 
-        # Refs #910
-        # The same Context instance may be passed around a lot, so if we've
-        # seen it before, just re-use the previous output.
-        context_id = id(context)
-        if context_id in self.seen_contexts:
-            context_list = self.seen_contexts[context_id]
-        else:
-            context_list = []
-            for context_layer in context.dicts:
-                temp_layer = {}
-                if hasattr(context_layer, 'items'):
+        context_list = []
+        for context_layer in context.dicts:
+            if hasattr(context_layer, 'items'):
+                # Refs #910
+                # The same dictionary may be passed around a lot, so if we've
+                # seen it before, just re-use the previous output.
+                # We use the id *and* the keys because for some reason
+                # just using the id doesn't work correctly (for example,
+                # it misses a whole lot of data for select_option.html?)
+                context_layer_id = (id(context_layer), tuple(sorted(context_layer.keys())))
+                if context_layer_id not in self.seen_contexts:
+                    temp_layer = {}
                     for key, value in context_layer.items():
                         # Replace any request elements - they have a large
                         # unicode representation and the request data is
@@ -128,21 +129,13 @@ class TemplatesPanel(Panel):
                                 temp_layer[key] = value
                             finally:
                                 recording(True)
-                try:
-                    prettified_layer = force_text(pformat(temp_layer))
-                except UnicodeEncodeError:
-                    pass
-                else:
-                    context_list.append(prettified_layer)
-            # Refs GitHub issue #910
-            # After Django introduced template based form widget rendering,
-            # djdt has to collect and format far more contexts, many of which
-            # are duplicates, and don't need formatting if we've already seen
-            # the exact same context.
-            # At this point, we know this is the first time we've seen and
-            # collected the layers of this context, so we store the value into
-            # a dictionary whose key is the id() of the Context instance.
-            self.seen_contexts[context_id] = context_list
+                    try:
+                        prettified_layer = force_text(pformat(temp_layer))
+                    except UnicodeEncodeError:
+                        pass
+                    else:
+                        self.seen_contexts[context_layer_id] = prettified_layer
+                context_list.append(self.seen_contexts[context_layer_id])
 
         kwargs['context'] = context_list
         kwargs['context_processors'] = getattr(context, 'context_processors', None)
