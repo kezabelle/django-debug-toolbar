@@ -70,10 +70,11 @@ class TemplatesPanel(Panel):
         super(TemplatesPanel, self).__init__(*args, **kwargs)
         self.templates = []
         # Refs GitHub issue #910
-        # Holds a collection of unique context layers, keyed by a string 
-        # version of them, with the value holding the `pformat` output 
-        # of the original dictionary. See _store_template_info.
-        self.pformats = {}
+        # Holds a collection of unique contexts, keyed by the id()
+        # of them, with the value holding a list of  `pformat` output
+        # of the original layers. See _store_template_info.
+        self.seen_contexts = {}
+
 
     def _store_template_info(self, sender, **kwargs):
         template, context = kwargs['template'], kwargs['context']
@@ -83,63 +84,65 @@ class TemplatesPanel(Panel):
                 template.name.startswith('debug_toolbar/')):
             return
 
-        context_list = []
-        for context_layer in context.dicts:
-            temp_layer = {}
-            if hasattr(context_layer, 'items'):
-                for key, value in context_layer.items():
-                    # Replace any request elements - they have a large
-                    # unicode representation and the request data is
-                    # already made available from the Request panel.
-                    if isinstance(value, http.HttpRequest):
-                        temp_layer[key] = '<<request>>'
-                    # Replace the debugging sql_queries element. The SQL
-                    # data is already made available from the SQL panel.
-                    elif key == 'sql_queries' and isinstance(value, list):
-                        temp_layer[key] = '<<sql_queries>>'
-                    # Replace LANGUAGES, which is available in i18n context processor
-                    elif key == 'LANGUAGES' and isinstance(value, tuple):
-                        temp_layer[key] = '<<languages>>'
-                    # QuerySet would trigger the database: user can run the query from SQL Panel
-                    elif isinstance(value, (QuerySet, RawQuerySet)):
-                        model_name = "%s.%s" % (
-                            value.model._meta.app_label, value.model.__name__)
-                        temp_layer[key] = '<<%s of %s>>' % (
-                            value.__class__.__name__.lower(), model_name)
-                    else:
-                        try:
-                            recording(False)
-                            force_text(value)  # this MAY trigger a db query
-                        except SQLQueryTriggered:
-                            temp_layer[key] = '<<triggers database query>>'
-                        except UnicodeEncodeError:
-                            temp_layer[key] = '<<unicode encode error>>'
-                        except Exception:
-                            temp_layer[key] = '<<unhandled exception>>'
+        # Refs #910
+        # The same Context instance may be passed around a lot, so if we've
+        # seen it before, just re-use the previous output.
+        context_id = id(context)
+        if context_id in self.seen_contexts:
+            context_list = self.seen_contexts[context_id]
+        else:
+            context_list = []
+            for context_layer in context.dicts:
+                temp_layer = {}
+                if hasattr(context_layer, 'items'):
+                    for key, value in context_layer.items():
+                        # Replace any request elements - they have a large
+                        # unicode representation and the request data is
+                        # already made available from the Request panel.
+                        if isinstance(value, http.HttpRequest):
+                            temp_layer[key] = '<<request>>'
+                        # Replace the debugging sql_queries element. The SQL
+                        # data is already made available from the SQL panel.
+                        elif key == 'sql_queries' and isinstance(value, list):
+                            temp_layer[key] = '<<sql_queries>>'
+                        # Replace LANGUAGES, which is available in i18n context processor
+                        elif key == 'LANGUAGES' and isinstance(value, tuple):
+                            temp_layer[key] = '<<languages>>'
+                        # QuerySet would trigger the database: user can run the query from SQL Panel
+                        elif isinstance(value, (QuerySet, RawQuerySet)):
+                            model_name = "%s.%s" % (
+                                value.model._meta.app_label, value.model.__name__)
+                            temp_layer[key] = '<<%s of %s>>' % (
+                                value.__class__.__name__.lower(), model_name)
                         else:
-                            temp_layer[key] = value
-                        finally:
-                            recording(True)
+                            try:
+                                recording(False)
+                                force_text(value)  # this MAY trigger a db query
+                            except SQLQueryTriggered:
+                                temp_layer[key] = '<<triggers database query>>'
+                            except UnicodeEncodeError:
+                                temp_layer[key] = '<<unicode encode error>>'
+                            except Exception:
+                                temp_layer[key] = '<<unhandled exception>>'
+                            else:
+                                temp_layer[key] = value
+                            finally:
+                                recording(True)
+                try:
+                    prettified_layer = force_text(pformat(temp_layer))
+                except UnicodeEncodeError:
+                    pass
+                else:
+                    context_list.append(prettified_layer)
             # Refs GitHub issue #910
-            # After Django introduced template based form widget rendering, 
+            # After Django introduced template based form widget rendering,
             # djdt has to collect and format far more contexts, many of which
             # are duplicates, and don't need formatting if we've already seen
             # the exact same context.
-            # We sort the `temp_layer` dictionary as a 2-tuple to ensure that
-            # ordering is consistent, before simply converting it to a string
-            # representation to ensure UnicodeEncodeError can be raised as it
-            # was previously.
-            # If the stringification succeeded, and we've not seen the key
-            # before, pformat it. If we've seen it before, we should be able
-            # to just re-use it.
-            try:
-                forced = force_text(sorted(temp_layer.items()))
-            except UnicodeEncodeError:
-                continue
-            else:
-                if forced not in self.pformats:
-                    self.pformats[forced] = force_text(pformat(temp_layer))
-                context_list.append(self.pformats[forced])
+            # At this point, we know this is the first time we've seen and
+            # collected the layers of this context, so we store the value into
+            # a dictionary whose key is the id() of the Context instance.
+            self.seen_contexts[context_id] = context_list
 
         kwargs['context'] = context_list
         kwargs['context_processors'] = getattr(context, 'context_processors', None)
