@@ -69,6 +69,9 @@ class TemplatesPanel(Panel):
     def __init__(self, *args, **kwargs):
         super(TemplatesPanel, self).__init__(*args, **kwargs)
         self.templates = []
+        # ...
+        self.seen_layers = []
+        self.pformat_layers = []
 
     def _store_template_info(self, sender, **kwargs):
         template, context = kwargs['template'], kwargs['context']
@@ -80,47 +83,60 @@ class TemplatesPanel(Panel):
 
         context_list = []
         for context_layer in context.dicts:
-            temp_layer = {}
-            if hasattr(context_layer, 'items'):
-                for key, value in context_layer.items():
-                    # Replace any request elements - they have a large
-                    # unicode representation and the request data is
-                    # already made available from the Request panel.
-                    if isinstance(value, http.HttpRequest):
-                        temp_layer[key] = '<<request>>'
-                    # Replace the debugging sql_queries element. The SQL
-                    # data is already made available from the SQL panel.
-                    elif key == 'sql_queries' and isinstance(value, list):
-                        temp_layer[key] = '<<sql_queries>>'
-                    # Replace LANGUAGES, which is available in i18n context processor
-                    elif key == 'LANGUAGES' and isinstance(value, tuple):
-                        temp_layer[key] = '<<languages>>'
-                    # QuerySet would trigger the database: user can run the query from SQL Panel
-                    elif isinstance(value, (QuerySet, RawQuerySet)):
-                        model_name = "%s.%s" % (
-                            value.model._meta.app_label, value.model.__name__)
-                        temp_layer[key] = '<<%s of %s>>' % (
-                            value.__class__.__name__.lower(), model_name)
-                    else:
-                        try:
-                            recording(False)
-                            pformat(value)  # this MAY trigger a db query
-                        except SQLQueryTriggered:
-                            temp_layer[key] = '<<triggers database query>>'
-                        except UnicodeEncodeError:
-                            temp_layer[key] = '<<unicode encode error>>'
-                        except Exception:
-                            temp_layer[key] = '<<unhandled exception>>'
+            if hasattr(context_layer, 'items') and context_layer:
+                # ...
+                key_values = sorted(context_layer.items())
+                if key_values in self.seen_layers:
+                    index = self.seen_layers.index(key_values)
+                    pformatted = self.pformat_layers[index]
+                else:
+                    temp_layer = {}
+                    for key, value in key_values:
+                        # Replace any request elements - they have a large
+                        # unicode representation and the request data is
+                        # already made available from the Request panel.
+                        if isinstance(value, http.HttpRequest):
+                            temp_layer[key] = '<<request>>'
+                        # Replace the debugging sql_queries element. The SQL
+                        # data is already made available from the SQL panel.
+                        elif key == 'sql_queries' and isinstance(value, list):
+                            temp_layer[key] = '<<sql_queries>>'
+                        # Replace LANGUAGES, which is available in i18n context processor
+                        elif key == 'LANGUAGES' and isinstance(value, tuple):
+                            temp_layer[key] = '<<languages>>'
+                        # QuerySet would trigger the database: user can run the query from SQL Panel
+                        elif isinstance(value, (QuerySet, RawQuerySet)):
+                            model_name = "%s.%s" % (
+                                value.model._meta.app_label, value.model.__name__)
+                            temp_layer[key] = '<<%s of %s>>' % (
+                                value.__class__.__name__.lower(), model_name)
                         else:
-                            temp_layer[key] = value
-                        finally:
-                            recording(True)
-            try:
-                context_list.append(pformat(temp_layer))
-            except UnicodeEncodeError:
-                pass
+                            try:
+                                recording(False)
+                                force_text(value)  # this MAY trigger a db query
+                            except SQLQueryTriggered:
+                                temp_layer[key] = '<<triggers database query>>'
+                            except UnicodeEncodeError:
+                                temp_layer[key] = '<<unicode encode error>>'
+                            except Exception:
+                                temp_layer[key] = '<<unhandled exception>>'
+                            else:
+                                temp_layer[key] = value
+                            finally:
+                                recording(True)
+                    # ...
+                    self.seen_layers.append(key_values)
+                    index = self.seen_layers.index(key_values)
+                    try:
+                        pformatted = force_text(pformat(temp_layer))
+                    except UnicodeEncodeError as e:
+                        # ...
+                        pformatted = '{"UnicodeEncodeError": %s}' % (force_text(e),)
+                    self.pformat_layers.insert(index, pformatted)
+                # ...
+                context_list.append(pformatted)
 
-        kwargs['context'] = [force_text(item) for item in context_list]
+        kwargs['context'] = context_list
         kwargs['context_processors'] = getattr(context, 'context_processors', None)
         self.templates.append(kwargs)
 
